@@ -59,6 +59,11 @@ export function PlaceDetail({
 
         <p className="mt-5 text-sm leading-relaxed text-ink">{place.summary}</p>
         <p className="mt-3 text-sm leading-relaxed text-muted">{place.why}</p>
+        {place.line ? (
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            The colored line is this route, traced from OpenStreetMap and simplified. Side spurs, closures, and private land are not all drawn. A line is not a permit.
+          </p>
+        ) : null}
 
         {place.status ? (
           <div className="mt-5 border-l-2 border-clay bg-paper-2 px-3 py-3">

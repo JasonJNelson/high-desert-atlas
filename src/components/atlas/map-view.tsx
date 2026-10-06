@@ -4,6 +4,14 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import type { BasemapId, Place } from "@/data/places";
 import { REGIONS } from "@/data/places";
 
+const maplibrePromise =
+  typeof window === "undefined"
+    ? null
+    : Promise.all([
+        import("maplibre-gl"),
+        import("maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url"),
+      ]);
+
 const REGION_COLORS = Object.fromEntries(REGIONS.map((region) => [region.id, region.color])) as Record<
   string,
   string
@@ -38,6 +46,19 @@ function toGeoJson(places: Place[]) {
       geometry: { type: "Point", coordinates: [place.lng, place.lat] },
       properties: { id: place.id, name: place.name, region: place.region },
     })),
+  };
+}
+
+function toTrails(places: Place[]) {
+  return {
+    type: "FeatureCollection" as const,
+    features: places
+      .filter((place) => place.line && place.line.length > 0)
+      .map((place) => ({
+        type: "Feature" as const,
+        geometry: { type: "MultiLineString" as const, coordinates: place.line },
+        properties: { id: place.id, name: place.name, region: place.region },
+      })),
   };
 }
 
@@ -76,8 +97,9 @@ export function MapView({
     let cancelled = false;
 
     (async () => {
-      const maplibregl = await import("maplibre-gl");
-      const workerUrl = (await import("maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url")).default;
+      if (!maplibrePromise) return;
+      const [maplibregl, workerMod] = await maplibrePromise;
+      const workerUrl = workerMod.default;
       if (typeof workerUrl === "string") maplibregl.setWorkerUrl(workerUrl);
       if (cancelled || !containerRef.current) return;
       const view = new maplibregl.Map({
@@ -106,6 +128,80 @@ export function MapView({
           cluster: true,
           clusterRadius: 46,
           clusterMaxZoom: 8,
+        });
+        view.addSource("trails", {
+          type: "geojson",
+          data: toTrails(placesRef.current),
+        });
+        view.addLayer({
+          id: "trail-casing",
+          type: "line",
+          source: "trails",
+          paint: {
+            "line-color": "#f3efe6",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 4, 2.4, 8, 5, 12, 8],
+            "line-opacity": 0.95,
+          },
+          layout: { "line-cap": "round", "line-join": "round" },
+        });
+        view.addLayer({
+          id: "trails",
+          type: "line",
+          source: "trails",
+          paint: {
+            "line-color": [
+              "match",
+              ["get", "region"],
+              "vegas",
+              REGION_COLORS.vegas,
+              "utah",
+              REGION_COLORS.utah,
+              "arizona",
+              REGION_COLORS.arizona,
+              "colorado",
+              REGION_COLORS.colorado,
+              "newmexico",
+              REGION_COLORS.newmexico,
+              "#1c1915",
+            ],
+            "line-width": ["interpolate", ["linear"], ["zoom"], 4, 1.3, 8, 2.8, 12, 4.4],
+          },
+          layout: { "line-cap": "round", "line-join": "round" },
+        });
+        view.addLayer({
+          id: "trail-selected",
+          type: "line",
+          source: "trails",
+          filter: ["==", ["get", "id"], selectedRef.current ?? ""],
+          paint: {
+            "line-color": "#1c1915",
+            "line-width": ["interpolate", ["linear"], ["zoom"], 4, 3.2, 12, 7],
+          },
+          layout: { "line-cap": "round", "line-join": "round" },
+        });
+        view.addLayer({
+          id: "trail-hit",
+          type: "line",
+          source: "trails",
+          paint: { "line-color": "rgba(0,0,0,0.01)", "line-width": 16 },
+        });
+        view.addLayer({
+          id: "trail-labels",
+          type: "symbol",
+          source: "trails",
+          minzoom: 9,
+          layout: {
+            "symbol-placement": "line",
+            "text-field": ["get", "name"],
+            "text-font": ["Noto Sans Regular"],
+            "text-size": 12,
+            "text-max-angle": 35,
+          },
+          paint: {
+            "text-color": "#1c1915",
+            "text-halo-color": "#f3efe6",
+            "text-halo-width": 1.4,
+          },
         });
         view.addLayer({
           id: "clusters",
@@ -219,13 +315,22 @@ export function MapView({
           return;
         }
         const points = view.queryRenderedFeatures(event.point, { layers: ["points"] });
-        const id = points[0]?.properties?.id;
-        if (typeof id === "string") onSelectRef.current(id);
+        const pointId = points[0]?.properties?.id;
+        if (typeof pointId === "string") {
+          onSelectRef.current(pointId);
+          return;
+        }
+        if (view.getLayer("trail-hit")) {
+          const trails = view.queryRenderedFeatures(event.point, { layers: ["trail-hit"] });
+          const trailId = trails[0]?.properties?.id;
+          if (typeof trailId === "string") onSelectRef.current(trailId);
+        }
       });
 
       view.on("mousemove", (event) => {
         if (!view.getLayer("points")) return;
-        const hit = view.queryRenderedFeatures(event.point, { layers: ["points", "clusters"] });
+        const layers = view.getLayer("trail-hit") ? ["points", "clusters", "trail-hit"] : ["points", "clusters"];
+        const hit = view.queryRenderedFeatures(event.point, { layers });
         view.getCanvas().style.cursor = hit.length > 0 ? "pointer" : "";
       });
     })();
@@ -246,18 +351,44 @@ export function MapView({
 
   useEffect(() => {
     const source = asGeoJson(mapRef.current?.getSource("places"));
-    if (!source) return;
-    source.setData(toGeoJson(places));
+    if (source) source.setData(toGeoJson(places));
+    const trails = asGeoJson(mapRef.current?.getSource("trails"));
+    if (trails) trails.setData(toTrails(places));
   }, [places]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map?.getLayer("selected")) return;
     map.setFilter("selected", ["==", ["get", "id"], selectedId ?? ""]);
+    if (map.getLayer("trail-selected")) {
+      map.setFilter("trail-selected", ["==", ["get", "id"], selectedId ?? ""]);
+    }
     if (!selectedId) return;
     const place = places.find((item) => item.id === selectedId);
     if (!place) return;
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (place.line && place.line.length > 0) {
+      let minLng = 180;
+      let minLat = 90;
+      let maxLng = -180;
+      let maxLat = -90;
+      for (const segment of place.line) {
+        for (const [lng, lat] of segment) {
+          minLng = Math.min(minLng, lng);
+          minLat = Math.min(minLat, lat);
+          maxLng = Math.max(maxLng, lng);
+          maxLat = Math.max(maxLat, lat);
+        }
+      }
+      map.fitBounds(
+        [
+          [minLng, minLat],
+          [maxLng, maxLat],
+        ],
+        { padding: 72, duration: reduce ? 0 : 1100, maxZoom: 13 },
+      );
+      return;
+    }
     map.flyTo({
       center: [place.lng, place.lat],
       zoom: Math.max(map.getZoom(), 9.4),
@@ -266,5 +397,5 @@ export function MapView({
     });
   }, [selectedId, places]);
 
-  return <div ref={containerRef} className="h-full w-full" />;
+  return <div ref={containerRef} className="h-full w-full bg-[#c5d0c4]" />;
 }

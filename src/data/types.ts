@@ -9,7 +9,8 @@ export type CategoryId =
   | "town"
   | "culture"
   | "landmark"
-  | "night";
+  | "night"
+  | "trail";
 
 export type BasemapId = "liberty" | "dark" | "satellite";
 
@@ -38,6 +39,8 @@ export type Place = {
   pairWith: string[];
   established?: string;
   website?: string;
+  /** Mapped route as one or more [lng, lat] lines. */
+  line?: [number, number][][];
 };
 
 export type RegionMeta = {

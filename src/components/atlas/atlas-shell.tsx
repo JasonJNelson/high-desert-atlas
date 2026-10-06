@@ -1,6 +1,7 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Heart, Map as MapIcon, Search, X } from "lucide-react";
-import { CATEGORIES, PLACES, REGIONS, getPlace, regionMeta } from "@/data/places";
+import { CATEGORIES, REGIONS, catalogWith, getPlace, regionMeta, rememberPlaces } from "@/data/places";
+import type { Place } from "@/data/places";
 import { filterPlaces } from "@/lib/filter-places";
 import { useAtlas } from "@/store/atlas";
 import { MapView } from "./map-view";
@@ -39,16 +40,48 @@ export function AtlasShell() {
     return () => window.removeEventListener("keydown", onKey);
   }, [showList]);
 
+  const [offroad, setOffroad] = useState<Place[]>([]);
+
+  useEffect(() => {
+    let cancel = false;
+    let started = false;
+    const start = () => {
+      if (started || cancel) return;
+      started = true;
+      void import("@/data/offroad").then((mod) => {
+        if (cancel) return;
+        rememberPlaces(mod.offroadPlaces);
+        setOffroad(mod.offroadPlaces);
+      });
+    };
+    const idle = window.requestIdleCallback?.(start, { timeout: 1800 });
+    const timer = window.setTimeout(start, 1400);
+    return () => {
+      cancel = true;
+      if (idle !== undefined) window.cancelIdleCallback(idle);
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  const catalog = useMemo(() => catalogWith(offroad), [offroad]);
+
   const filtered = useMemo(
-    () => filterPlaces(PLACES, { query, regions, categories, savedOnly, favorites }),
-    [query, regions, categories, savedOnly, favorites],
+    () => filterPlaces(catalog, { query, regions, categories, savedOnly, favorites }),
+    [catalog, query, regions, categories, savedOnly, favorites],
   );
+  const [listLimit, setListLimit] = useState(80);
+  useEffect(() => {
+    setListLimit(80);
+  }, [query, regions, categories, savedOnly]);
+  const visible = filtered.slice(0, listLimit);
 
   useEffect(() => {
     if (selectedId && !filtered.some((place) => place.id === selectedId)) showList();
   }, [filtered, selectedId, showList]);
 
-  const selected = selectedId ? getPlace(selectedId) : undefined;
+  const selected = selectedId
+    ? (catalog.find((place) => place.id === selectedId) ?? getPlace(selectedId))
+    : undefined;
   const filtersActive = query.length > 0 || regions.length > 0 || categories.length > 0 || savedOnly;
 
   return (
@@ -140,7 +173,7 @@ export function AtlasShell() {
             </div>
             <div className="flex items-baseline justify-between px-4 pb-1">
               <p className="text-xs text-muted tabular-nums">
-                {filtered.length} of {PLACES.length} places
+                {filtered.length} of {catalog.length} places
               </p>
               {filtersActive ? (
                 <button type="button" className="text-xs font-medium text-pine" onClick={clearFilters}>
@@ -154,7 +187,7 @@ export function AtlasShell() {
                   Nothing matches. Clear a filter or try a place name, a town, or a trail.
                 </p>
               ) : (
-                filtered.map((place) => {
+                visible.map((place) => {
                   const region = regionMeta(place.region);
                   const saved = favorites.includes(place.id);
                   return (
@@ -176,7 +209,10 @@ export function AtlasShell() {
                             </span>
                             {saved ? <Heart size={14} className="mt-1 shrink-0" fill="currentColor" /> : null}
                           </span>
-                          <span className="mt-0.5 block text-xs text-muted">{place.area}</span>
+                          <span className="mt-0.5 block text-xs text-muted">
+                            {place.area}
+                            {place.line ? " · mapped route" : ""}
+                          </span>
                           <span className="mt-1 block text-sm leading-snug text-ink/80">
                             {place.signature}
                           </span>
@@ -186,6 +222,15 @@ export function AtlasShell() {
                   );
                 })
               )}
+              {filtered.length > visible.length ? (
+                <button
+                  type="button"
+                  className="row-btn text-sm font-medium"
+                  onClick={() => setListLimit((limit) => limit + 80)}
+                >
+                  Show {Math.min(80, filtered.length - visible.length)} more of {filtered.length}
+                </button>
+              ) : null}
             </div>
             <div className="flex gap-2 border-t border-line px-3 py-3">
               {(
@@ -213,7 +258,7 @@ export function AtlasShell() {
         <MapView places={filtered} selectedId={selectedId} basemap={basemap} onSelect={select} />
         <div className="pointer-events-none absolute top-3 right-3 left-3 flex justify-end md:left-auto">
           <p className="pointer-events-none hidden max-w-sm bg-paper/95 px-3 py-2 text-xs leading-snug text-muted shadow-panel md:block">
-            {filtered.length} pins. Select one for fees, permits, seasons, and what to watch for.
+            {filtered.length} places. Select one for miles, vehicle, and what to watch for.
           </p>
         </div>
       </div>

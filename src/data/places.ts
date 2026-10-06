@@ -50,6 +50,7 @@ export const CATEGORIES: { id: CategoryId; label: string }[] = [
   { id: "culture", label: "Culture" },
   { id: "landmark", label: "Landmarks" },
   { id: "night", label: "Night" },
+  { id: "trail", label: "Off-road" },
 ];
 
 export const PLACES: Place[] = [
@@ -60,7 +61,27 @@ export const PLACES: Place[] = [
   ...newMexicoPlaces,
 ];
 
+export function catalogWith(offroad: Place[]): Place[] {
+  const pick = (region: RegionId) => offroad.filter((place) => place.region === region);
+  return [
+    ...vegasPlaces,
+    ...pick("vegas"),
+    ...utahPlaces,
+    ...pick("utah"),
+    ...arizonaPlaces,
+    ...pick("arizona"),
+    ...coloradoPlaces,
+    ...pick("colorado"),
+    ...newMexicoPlaces,
+    ...pick("newmexico"),
+  ];
+}
+
 const byId = new Map(PLACES.map((place) => [place.id, place]));
+
+export function rememberPlaces(places: Place[]) {
+  for (const place of places) byId.set(place.id, place);
+}
 
 export function getPlace(id: string): Place | undefined {
   return byId.get(id);
